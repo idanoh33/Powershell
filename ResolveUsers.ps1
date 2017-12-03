@@ -17,14 +17,11 @@
         [Parameter(ValueFromPipelineByPropertyName=$true,
                    Position=0)]
         $groupListFile= "c:\temp\groupList.txt"
-
-        # Param2 help description
-        
-        
     )
 
     Begin
     {
+    # Read groups from file
     $Groups = cat $groupListFile
     }
     Process
