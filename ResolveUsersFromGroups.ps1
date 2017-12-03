@@ -1,14 +1,13 @@
 #requires -Module ActiveDirectory
 <#
 .Synopsis
-   The script will reslove users from the groups are listed on groupList file
+   The script will generate CSV with the users for every group in $groupListFile
 .DESCRIPTION
-   The script will reslove users from the groups are listed on groupListFile (by default c:\temp\groupList.txt)
-   and will export it to c:\temp\GroupList\$group.csv
+   The script will generate CSV with the users for every group in $groupListFile
 .EXAMPLE
-   . C:\temp\ResolveUsers.ps1
+   . C:\temp\ResolveUsersFromGroups.ps1
 .EXAMPLE
-    . C:\temp\ResolveUsers.ps1 -groupListFile C:\temp\groupList.txt
+    . C:\temp\ResolveUsersFromGroups.ps1 -groupListFile C:\temp\groupList.txt
 #>
     [CmdletBinding()]
 
