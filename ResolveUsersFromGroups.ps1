@@ -27,7 +27,7 @@
     Import-Module ActiveDirectory -ErrorAction Stop
     
     # Read groups from file
-    $Groups = cat $groupListFile
+    $Groups = Get-Content $groupListFile
     }
     Process
     {
@@ -42,7 +42,7 @@
                     
                     # Find user and export to file in $path, if there are spaces they will be remove
                     Get-ADUser -Identity $Member -Properties office | `
-                    Select SamAccountName,Office | `
+                    Select-Object SamAccountName,Office | `
                     Export-Csv ("$path\$Group.csv").Replace(" ","") -Append -Force 
                 }
         }
