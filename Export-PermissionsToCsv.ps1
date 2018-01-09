@@ -63,6 +63,7 @@
     }
     End
     {
-    #$output | select-object -Property file, User, Access, Folder | export-csv $CsvPath -force -NoTypeInformation
+    
+    if (Test-Path $CsvPath) {Write-Output "CSV file exported successfully to $CsvPath"}
 
     }
