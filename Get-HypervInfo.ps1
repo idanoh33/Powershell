@@ -844,6 +844,479 @@ $($hlString)
 
 #endregion
 
+#region Gathering Hyper-V Host Information
+#-----------------------------------------
+    
+if ($Cluster) {
+    
+    if (($Cluster -eq "localhost") -or ($Cluster -eq "127.0.0.1"))
+    {
+        $ClusterName = $env:COMPUTERNAME
+    }
+    else
+    {
+        $ClusterName = $Cluster
+    }
+    
+    $ClusterNodes = $null
+
+    if (Get-Cluster -Name $ClusterName -ErrorAction SilentlyContinue)
+    {
+        $ClusterName = (Get-Cluster -Name $ClusterName).Name
+        $hostTableCaption = "Cluster Nodes"
+        $volumeTableCaption = "Clustered Disks/Volumes"
+
+        sPrint -Type 1 -Message "$($ClusterName.ToUpper()) is accessible. Gathering Node information..." -WriteToLogFile $True
+        Start-Sleep -Seconds 3
+
+        sPrint -Type 1 -Message "Checking prerequisites for Hyper-V Cluster reporting..." -WriteToLogFile $True
+        Start-Sleep -Seconds 3
+
+        $clusterNodesData = Get-ClusterNode -Cluster $ClusterName -ErrorAction SilentlyContinue | select Name,State
+        $ClusterNodes = ($clusterNodesData | where{$_.State -ne "Down"}).Name
+        $downClusterNodes = ($clusterNodesData | where{$_.State -eq "Down"}).Name
+        $ovTotalNode = ($clusterNodesData).Count
+
+        if ($downClusterNodes)
+        {
+            sPrint -Type 0 "Unavailable or down Hyper-V Cluster Node(s): $downClusterNodes" -WriteToLogFile $True
+            Start-Sleep -Seconds 3
+        }
+
+        if ($ClusterNodes)
+        {
+            # Checking Cluster Owner Node OS version and Hyper-V role
+            $clusterOwnerHostName = sGet-Wmi -ComputerName $ClusterName -Namespace root\Cimv2 -Class  Win32_ComputerSystem -Property Name
+            if ($clusterOwnerHostName[1] -eq 1)
+            {
+                $clusterOwnerHostName = $clusterOwnerHostName[0].Name
+            }
+            else
+            {
+                sPrint -Type 0 -Message "$ClusterName`: $($clusterOwnerHostName[0])" -WriteToLogFile $True
+                sPrint -Type 0 -Message "Script terminated!" -WriteToLogFile $True
+                Break
+            }
+            
+            $osVersion = $null
+            $getClusterOwnerNode = Get-ClusterNode -Cluster $ClusterName -Name $clusterOwnerHostName
+            $osVersion = ($getClusterOwnerNode.MajorVersion).ToString() + "." + ($getClusterOwnerNode.MinorVersion).ToString()
+            if (($osVersion -like "6.2") -or ($osVersion -like "6.3"))
+            {
+                if ((Get-WindowsFeature -ComputerName $clusterOwnerHostName -Name "Hyper-V").Installed)
+                {
+                    sPrint -Type 5 -Message "Operating system version and Hyper-V role on the cluster owner node is OK." -WriteToLogFile $True
+                    $VMHosts = $ClusterNodes
+
+                    # Clear
+                    $offlineVmConfigData = $null
+                    $ovTotalVm, $ovOfflineVmConfig = 0
+
+                    # Get ClusterResource Data
+                    $clusterResourceData = Get-ClusterResource -Cluster $ClusterName
+
+                    # Detect offline Virtual Machine Configuration resources
+                    $offlineVmConfigData = $clusterResourceData | where{($_.ResourceType -eq "Virtual Machine Configuration") -and ($_.State -ne "Online")}
+
+                    # For Cluster Overview
+                    $ovTotalVm = ($clusterResourceData | where{$_.ResourceType -eq "Virtual Machine"}).Count
+                }
+                else
+                {
+                    sPrint -Type 2 -Message "Hyper-V role is not installed on $clusterOwnerHostName." -WriteToLogFile $True
+                    sPrint -Type 0 -Message "Script terminated!" -WriteToLogFile $True
+                    Break
+                }
+            }
+            else
+            {
+                sPrint -Type 2 -Message "$($ClusterName.ToUpper()): Incompatible operating system version detected. Supported operating systems are Windows Server 2012 and Windows Server 2012 R2." -WriteToLogFile $True
+                sPrint -Type 0 -Message "Script terminated!" -WriteToLogFile $True
+                Break
+            }
+        }
+        else
+        {
+            sPrint -Type 0 -Message "$ClusterName`: $($error[0].Exception.Message)" -WriteToLogFile $True
+            sPrint -Type 0 -Message "Script terminated!" -WriteToLogFile $True
+            Break
+        }
+    }
+    else
+    {
+        sPrint -Type 0 -Message "$($ClusterName.ToUpper()): $($error[0].Exception.Message)" -WriteToLogFile $True
+        sPrint -Type 0 -Message "Script terminated!" -WriteToLogFile $True
+        Break
+    }
+}
+    
+if ($VMHost) {
+
+    if (($Cluster -eq "localhost") -or ($Cluster -eq "127.0.0.1"))
+    {
+        $Computers = $env:COMPUTERNAME
+    }
+    else
+    {
+        $Computers = $VMHost | Sort-Object -Unique
+    }
+
+    [array]$invalidVmHost = $null
+    [array]$invalidVmHostMsg = $null
+    $hostTableCaption = "Standalone Host(s)"
+    $volumeTableCaption = "Local Disks/Volumes"
+
+    sPrint -Type 1 -Message "Checking prerequisites for standalone Hyper-V host(s) reporting..." -WriteToLogFile $True
+    Start-Sleep -Seconds 3
+
+    foreach ($ComputerName in $Computers)
+    {
+        $osVersion = $null
+        $osVersion = sGet-Wmi -ComputerName $ComputerName -Namespace root\Cimv2 -Class Win32_OperatingSystem -Property Version
+        
+        if ($osVersion[1] -eq 1)
+        {
+            $osVersion = $osVersion[0].Version
+        }
+        else
+        {
+            sPrint -Type 0 -Message "$($ComputerName.ToUpper()): $($osVersion[0])" -WriteToLogFile $True
+            Start-Sleep -Seconds 3
+            $invalidVmHost += $ComputerName
+            $invalidVmHostMsg += $osVersion[0]
+            Continue
+        }
+
+        if ($OsVersion)
+        {
+            if (($OsVersion -like "6.2*") -or ($OsVersion -like "6.3*"))
+            {
+                if ((Get-WindowsFeature -ComputerName $ComputerName -Name "Hyper-V").Installed)
+                {
+                    $checkClusterMember = sGet-Wmi -ComputerName $ComputerName -Namespace root\MSCluster -Class MSCluster_Cluster -Property Name
+                    if ($checkClusterMember[1] -eq 1)
+                    {
+                        sPrint -Type 0 -Message "$($ComputerName.ToUpper()) is a member of a Hyper-V Cluster and didn't included in the VMHost list. Please use -Cluster parameter to report this node." -WriteToLogFile $True
+                        $invalidVmHost += $ComputerName
+                        $invalidVmHostMsg += "This Node is a member of a cluster. Please use -Cluster parameter to report this node."
+                    }
+                    else
+                    {
+                        sPrint -Type 5 -Message "$($ComputerName.ToUpper()): Operating system version and Hyper-V role is OK." -WriteToLogFile $True
+                        $VMHosts += $ComputerName
+                    }
+                }
+                else
+                {
+                    sPrint -Type 0 -Message "$($ComputerName.ToUpper()): Could not be added to the VMHost list because Hyper-V role is not installed." -WriteToLogFile $True
+                    $invalidVmHost += $ComputerName
+                    $invalidVmHostMsg += "Could not be added to the VMHost list because Hyper-V role is not installed"
+                }
+            }
+            else
+            {
+                sPrint -Type 0 -Message "$($ComputerName.ToUpper()): Could not be added to the VMHost list because incompatible operating system version detected." -WriteToLogFile $True
+                $invalidVmHost += $ComputerName
+                $invalidVmHostMsg += "Could not be added to the VMHost list because incompatible operating system version detected"
+            }            
+        }
+        else
+        {
+            sPrint -Type 0 -Message "$($ComputerName.ToUpper()): Could not be added to the VMHost list because operating system version could not be detected." -WriteToLogFile $True
+            $invalidVmHost += $ComputerName
+            $invalidVmHostMsg += "Could not be added to the VMHost list because operating system version could not be detected"
+        }
+    }
+}
+
+if (!$VMHosts) {
+
+    sPrint -Type 2 "No valid server for reporting." -WriteToLogFile $True
+    sPrint -Type 0 -Message "Script terminated!" -WriteToLogFile $True
+    Break
+}
+else {
+    
+    if ($Cluster)
+    {
+        sPrint -Type 1 "Available Hyper-V Cluster Node(s) for reporting: $VMHosts" -WriteToLogFile $True
+        Start-Sleep -Seconds 3
+    }
+    else
+    {
+        sPrint -Type 1 "Available Hyper-V server(s) for reporting: $VMHosts" -WriteToLogFile $True
+        Start-Sleep -Seconds 3
+    }
+}
+
+# Print MSG
+sPrint -Type 1 "Gathering Hyper-V Host information..." -WriteToLogFile $True
+
+# VMHosts-Table Header
+    $outVMHostTableStart ="
+    <div class=""VMHosts""><!--Start VMHosts Class-->
+        <h2>$($hostTableCaption)</h2><br>
+        <table id=""VMHosts-Table"">
+        <tbody>
+            <tr><!--Header Line-->
+                <th><p style=""text-align:left;margin-left:-4px"">Name</p></th>
+                <th><p>State</p></th>
+                <th><p>Uptime</p></th>
+                <th><p>Domain</p></th>
+                <th><p style=""line-height:1.2"">Total<br>VM</p></th>
+                <th><p style=""line-height:1.2"">Active<br>vProcessor</p></th>
+                <th><p style=""line-height:1.2"">Logical<br>Processor</p></th>
+                <th><p style=""line-height:1.2"">Used<br>Memory</p></th>
+                <th><p style=""line-height:1.2"">Free<br>Memory</p></th>
+                <th><p style=""line-height:1.2"">Total<br>Memory</p></th>
+            </tr>"
+
+# Generate Data Lines
+$outVMHostTable = $null
+$ovUpNode, $ovTotalLP, $ovTotalMemory, $ovUsedMemory = 0
+$ovTotalVProc, $ovTotalVmMemory, $ovUsedVmMemory, $ovUsedVmVHD, $ovTotalVmVHD = 0
+
+foreach ($vmHostItem in $vmHosts) {
+
+    $highL = $false
+    $chargerVMHostTable = $null
+    $vmHostData = $null
+    $vmHostTotalVProc = 0
+    $vmHostVpLpRatio = 0
+    $vmHostRunningClusVmCount= 0
+    $vmHostGet = Get-VMHost -ComputerName $vmHostItem
+    $vmHostVMs = Get-VM -ComputerName $vmHostItem
+    $vmHostVmCount = $vmHostVMs.Count + ($offlineVmConfigData | where{$_.OwnerNode -eq "$vmHostItem"}).Count
+    $vmHostRunningVmCount = ($vmHostVMs | where{$_.State -eq "Running"}).Count
+    $vmHostRunningClusVmCount = ($vmHostVMs | where{($_.IsClustered -eq $true) -and ($_.State -eq "Running")}).Count
+    $vmHostRunningNonClusVmCount = $vmHostRunningVmCount - $vmHostRunningClusVmCount 
+    $vmHostTotalVProc = (($vmHostVMs | where{(($_.State -eq "Running") -or ($_.State -eq "Paused"))}).ProcessorCount | Measure-Object -Sum).Sum
+    $vmHostClusVProc = (($vmHostVMs | where{(($_.State -eq "Running") -and ($_.IsClustered -eq $true)) -or (($_.State -eq "Paused") -and ($_.IsClustered -eq $true))}).ProcessorCount | Measure-Object -Sum).Sum
+    $vmHostWmiData = Get-WmiObject -ComputerName $vmHostItem -Class Win32_OperatingSystem
+
+    # For Cluster Overview
+    $ovTotalVProc = $ovTotalVProc + $vmHostClusVProc
+
+    # State
+    if ($Cluster)
+    {
+        $vmHostState = (Get-ClusterNode -Cluster $ClusterName -Name $vmHostItem).State
+    }
+    else
+    {
+        $vmHostState = "Up"  
+    }
+
+    # State Colors
+    if ($vmHostState -eq "Up")
+    {
+        $outVmHostState = "Up",$stateBgColors[1],$stateWordColors[1]
+    }
+    elseif ($vmHostState -eq "Down")
+    {
+        $outVmHostState = "Down",$stateBgColors[3],$stateWordColors[3]
+        $highL = $true
+    }
+    elseif ($vmHostState -eq "Paused")
+    {
+        $outVmHostState = "Paused",$stateBgColors[2],$stateWordColors[2]
+    }
+    elseif ($vmHostState -eq "Joining")
+    {
+        $outVmHostState = "Joining",$stateBgColors[4],$stateWordColors[4]
+    }
+    else
+    {
+        $outVmHostState = "Unknown",$stateBgColors[5],$stateWordColors[5]
+        $highL = $true
+    }
+    
+    # Clear
+    $TotalUsedMemory = $null
+    $TotalFreeMemory = $null
+    $TotalVisibleMemory = $null
+    $vmHostUptime = $null
+    $TotalFreeMemoryPercentage = $null
+     
+    # Memory Capacty
+    $TotalUsedMemory = sConvert-Size -DiskVolumeSpace ($vmHostWmiData.TotalVisibleMemorySize - $vmHostWmiData.FreePhysicalMemory) -DiskVolumeSpaceUnit kb
+    $TotalFreeMemory = sConvert-Size -DiskVolumeSpace $vmHostWmiData.FreePhysicalMemory -DiskVolumeSpaceUnit kb
+    $TotalVisibleMemory = sConvert-Size -DiskVolumeSpace $vmHostWmiData.TotalVisibleMemorySize -DiskVolumeSpaceUnit kb
+    $TotalFreeMemoryPercentage = [math]::round(($vmHostWmiData.FreePhysicalMemory/$vmHostWmiData.TotalVisibleMemorySize)*100)
+
+    # Free Memory Percentage Colors
+    # 0 - $totalFreeMemoryBgColor
+    # 1 - $TotalFreeMemoryPercentageBgColor
+    # 2 - $TotalFreeMemoryPercentageWordColor
+    if (($TotalFreeMemoryPercentage -le 10) -and ($TotalFreeMemoryPercentage -gt 5))
+    {
+        $outVmHostFreeMemoryState = $stateBgColors[4],$stateBgColors[4],$stateWordColors[4]
+        $highL = $true
+    }
+    elseif ($TotalFreeMemoryPercentage -le 5)
+    {
+        $outVmHostFreeMemoryState = $stateBgColors[3],$stateBgColors[3],$stateWordColors[3]
+        $highL = $true
+    }
+    else
+    {
+        $outVmHostFreeMemoryState = $stateBgColors[0],$stateBgColors[0],"#BDBDBD"
+    }
+
+    # Hostname
+    $outVMHostName = ($vmHostGet.ComputerName).ToUpper()
+     
+    # Uptime
+    $vmHostUptime = ([Management.ManagementDateTimeConverter]::ToDateTime($vmHostWmiData.LocalDateTime)) - ([Management.ManagementDateTimeConverter]::ToDateTime($vmHostWmiData.LastBootUpTime))
+        if($vmHostUptime.Days -eq "0"){$vmHostUptimeDays = ""}
+        else{$vmHostUptimeDays = ($vmHostUptime.Days).ToString() + " <span style=""font-size:10px;color:#BDBDBD"">Days</span> <br>"}
+    $vmHostUptime = ($vmHostUptime.Hours).ToString() + ":" + ($vmHostUptime.Minutes).ToString() + ":" + ($vmHostUptime.Seconds).ToString()
+
+    # OS Version
+    $vmHostOsVersion = ($vmHostWmiData.Caption).Replace("Microsoft ","")
+
+    # Processor socket and HT state
+    $processorData = sGet-Wmi -ComputerName $vmHostItem -Namespace root\CIMv2 -Class Win32_Processor -Property DeviceID,NumberOfCores,NumberOfLogicalProcessors
+    if ($processorData[1] -eq 1)
+    {
+        $socketCount = ($processorData[0] | ForEach-Object {$_.DeviceID} | select-object -unique).Count
+        $coreCount = ($processorData[0].NumberOfCores | Measure-Object -Sum).Sum
+        $logicalProcCount = ($processorData[0].NumberOfLogicalProcessors | Measure-Object -Sum).Sum
+
+        if ($logicalProcCount -gt $coreCount)
+        {
+            $htState = "Active"
+        }
+        Else
+        {
+            $htState = "Inactive"
+        }
+    }
+    else
+    {
+        $socketCount = "-"
+        $htState = "Unknown"
+    }
+
+    $vmHostLpCount = $vmHostGet.LogicalProcessorCount
+    if (!$vmHostLpCount)
+    {
+        $vmHostLpCount = $logicalProcCount
+    }
+
+    # For Cluster Overview
+    if(($Cluster) -and ($vmHostState -eq "Up"))
+    {
+        $ovUpNode = $ovUpNode + 1
+        $ovTotalLP = $ovTotalLP + $vmHostLpCount
+        $ovUsedMemory = $ovUsedMemory + ($vmHostWmiData.TotalVisibleMemorySize - $vmHostWmiData.FreePhysicalMemory)
+        $ovTotalMemory = $ovTotalMemory + $vmHostWmiData.TotalVisibleMemorySize
+    }
+
+    # LP:VP Ratio
+    $vmHostVpLpRatio = ("{0:N2}" -f ($vmHostTotalVProc / $vmHostLpCount)).Replace(".00","")
+
+    # Computer and Processor Manufacturer/Model Info
+    $outVmHostComputerInfo = gwmi -ComputerName $vmHostItem -Class Win32_ComputerSystem -Property Manufacturer,Model
+    $outVmHostProcModel = (gwmi -ComputerName $vmHostItem -Class Win32_Processor).Name
+    if($outVmHostProcModel.count -gt 1)
+    {
+        $outVmHostProcModel = $outVmHostProcModel[0]
+    }
+    $outVmHostProcModel = $outVmHostProcModel.Replace("           "," ")
+
+    # Data Line
+    $chargerVMHostTable ="
+            <tr><!--Data Line-->
+                <td><p style=""text-align:left;""><abbr title=""Manufacturer: $($outVmHostComputerInfo.Manufacturer)&#10;Model: $($outVmHostComputerInfo.Model)"">$($outVMHostName) <span style=""font-size:10px;color:orange"">*</span></abbr><br><span style=""font-size:10px;color:#BDBDBD;text-align:left"">$($vmHostOsVersion)</span></p></td>
+                <td bgcolor=""$($outVmHostState[1])""><p style=""color:$($outVmHostState[2])"">$($outVmHostState[0])</p></td>
+                <td><p>$($vmHostUptimeDays)$($vmHostUptime)</p></td>
+                <td><p>$($vmHostGet.FullyQualifiedDomainName)</p></td>
+                <td><p style=""line-height:1.2"">$($vmHostVmCount) <br><span style=""font-size:10px;color:#BDBDBD""><abbr title=""Non-Clustered: $($vmHostRunningNonClusVmCount) | Clustered: $($vmHostRunningClusVmCount)"">$($vmHostRunningVmCount) Running <span style=""font-size:10px;color:orange"">*</span></abbr></span></p></td>
+                <td><p style=""line-height:1.2"">$($vmHostTotalVProc)<br><abbr title=""Virtual Processors per Logical Processor ratio (VP:LP)""><span style=""font-size:10px;color:#BDBDBD"">$($vmHostVpLpRatio):1 <span style=""font-size:10px;color:orange"">*</span></span></abbr></p></td>
+                <td><p style=""line-height:1.2"">$($vmHostLpCount) <br><span style=""font-size:10px;color:#BDBDBD""><abbr title=""Hyper-Threading: $($htState)&#10;Model: $($outVmHostProcModel)"">$($socketCount) Socket <span style=""font-size:10px;color:orange"">*</span></abbr></span></p></td>
+                <td><p style=""line-height:1.2"">$(($TotalUsedMemory)[0])<br><span style=""font-size:10px"">$(($TotalUsedMemory)[1])</span></p></td>
+                <td bgcolor=""$($outVmHostFreeMemoryState[0])""><p style=""line-height:1.2"">$(($TotalFreeMemory)[0])<br><span style=""font-size:10px"">$(($TotalFreeMemory)[1])</span></p></td>
+                <td><p style=""line-height:1.2"">$(($TotalVisibleMemory)[0]) <span style=""font-size:10px"">$(($TotalVisibleMemory)[1])</span> <br><span style=""font-size:10px;background-color:$($outVmHostFreeMemoryState[1]);color:$($outVmHostFreeMemoryState[2])"">&nbsp;~%$($TotalFreeMemoryPercentage) free&nbsp;</span></p></td>
+            </tr>"
+
+    # Add to HTML Table
+    if ($HighlightsOnly -eq $false)
+    {
+        # VMHost Output
+        $outVMHostTable += $chargerVMHostTable
+    }
+    elseif (($HighlightsOnly -eq $true) -and ($highL -eq $true))
+    {
+        # VMHost Output
+        $outVMHostTable += $chargerVMHostTable
+    }
+    else
+    {
+        # Blank
+    }
+}
+
+# Add offline or unsupported standalone hosts
+if ($invalidVmHost)
+{
+    [bytle]$numb = 0
+    ForEach ($VMhostIN in $invalidVmHost)
+    {
+
+    $outVMHostTable +="
+            <tr><!--Data Line-->
+                <td><p style=""text-align:left;"">$(($VMhostIN).ToUpper())<br><span style=""font-size:10px;color:#BDBDBD;text-align:left"">Operating System Unknown</span></p></td>
+                <td bgcolor=""$($stateBgColors[2])""><p style=""color:$($stateWordColors[2])"">Unaccessible</p></td>
+                <td colspan=""8""><p style=""text-align:left; color:#BDBDBD"">$($invalidVmHostMsg[$numb])</p></td>
+            </tr>"
+    
+    $numb = $numb + 1
+
+    }
+}
+
+# Add down cluster nodes
+if ($downClusterNodes)
+{
+    ForEach ($downClusterNode in $downClusterNodes)
+    {
+
+    $outVMHostTable +="
+            <tr><!--Data Line-->
+                <td><p style=""text-align:left;"">$($downClusterNode)<br><span style=""font-size:10px;color:#BDBDBD;text-align:left"">Operating System Unknown</span></p></td>
+                <td bgcolor=""$($stateBgColors[3])""><p style=""color:$($stateWordColors[3])"">Down</p></td>
+                <td colspan=""8""><p style=""text-align:left; color:#BDBDBD"">Hyper-V Cluster node is down or unavailable</p></td>
+            </tr>"
+    }
+}
+
+if (($outVMHostTable -eq $null) -and ($downClusterNodes -eq $null))
+{
+    if ($Cluster)
+    {
+        $outVMHostTable +="
+            <tr><!--Data Line-->
+                <td colspan=""10""><p style=""text-align:center""><span style=""padding-top:1px;padding-bottom:1px;background-color:#ACFA58;color:#298A08"">&nbsp;&nbsp;All Hyper-V Cluster Nodes are healthy&nbsp;&nbsp;</span></p></td>
+            </tr>"
+    }
+    else
+    {
+        $outVMHostTable +="
+            <tr><!--Data Line-->
+                <td colspan=""10""><p style=""text-align:center""><span style=""padding-top:1px;padding-bottom:1px;background-color:#ACFA58;color:#298A08"">&nbsp;All Standalone Hyper-V Hosts are healthy&nbsp;&nbsp;</span></p></td>
+            </tr>"
+    }
+}
+
+    # End VMHosts-Table
+    $outVMHostTableEnd ="
+        </tbody>
+        </table>
+    </div><!--End VMHosts Class-->"
+
+#endregion
+
 #region Gathering VM Information
 #-------------------------------
 
