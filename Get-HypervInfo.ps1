@@ -1344,7 +1344,7 @@ $ovPausedVm = 0
 # Active VHD Array
 $activeVhds = @()
 
-ForEach ($VMHostItem in $VMHost) {
+ForEach ($VMHostItem in $VMHosts) {
     
     $getVMerr = $null
     if ($Cluster)
