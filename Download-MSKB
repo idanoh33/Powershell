@@ -1,9 +1,8 @@
 # Taken from https://gist.github.com/potatoqualitee/b5ed9d584c79f4b662ec38bd63e70a2d
 # based on Chrissy LeMaire (potatoqualitee) script
-
 $downloadFolder= "C:\Temp"
 $architecture= 'x64'
-$KBid= "MS11-025"
+$KBid= "MS09-035"
 if (!(Test-Path $downloadFolder )) {mkdir $downloadFolder}
 
 $url= "https://www.catalog.update.microsoft.com/Search.aspx?q=$KBid"
@@ -38,7 +37,7 @@ $exes=foreach ($guid in $guids) {
                 }
             }
 
-$exes | Select-String -Pattern "vcredist_$architecture" |  % {
+$exes | Select-String -Pattern "$architecture" |  % {
 $filename= Split-Path $_ -Leaf
 $_.tostring()
 $filename
