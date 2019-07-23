@@ -4,7 +4,7 @@
 $downloadFolder= "C:\Temp"
 $architecture= 'x64'
 $KBid= "MS11-025"
-if (!(Test-Path $donwloadFolder )) {mkdir $donwloadFolder}
+if (!(Test-Path $downloadFolder )) {mkdir $downloadFolder}
 
 $url= "https://www.catalog.update.microsoft.com/Search.aspx?q=$KBid"
 $content= Invoke-WebRequest -Uri $url
