@@ -1,0 +1,46 @@
+# Taken from https://gist.github.com/potatoqualitee/b5ed9d584c79f4b662ec38bd63e70a2d
+# based on Chrissy LeMaire (potatoqualitee) script
+
+$downloadFolder= "C:\Temp"
+$architecture= 'x64'
+$KBid= "MS11-025"
+if (!(Test-Path $donwloadFolder )) {mkdir $donwloadFolder}
+
+$url= "https://www.catalog.update.microsoft.com/Search.aspx?q=$KBid"
+$content= Invoke-WebRequest -Uri $url
+$content.Links
+$kbids = $content.InputFields |
+                Where-Object { $_.type -eq 'Button' -and $_.Value -eq 'Download' } |
+                Select-Object -ExpandProperty  ID
+
+ $guids = $content.Links |
+                Where-Object ID -match '_link' |
+                Where-Object { $_.OuterHTML -match ( "(?=.*" + ( $Filter -join ")(?=.*" ) + ")" ) } |
+                ForEach-Object { $_.id.replace('_link', '') } |
+                Where-Object { $_ -in $kbids }
+
+$exes=foreach ($guid in $guids) {
+                Write-Verbose -Message "Downloading information for $guid"
+                $post = @{ size = 0; updateID = $guid; uidInfo = $guid } | ConvertTo-Json -Compress
+                $body = @{ updateIDs = "[$post]" }
+                $links = Invoke-WebRequest -Uri 'http://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method Post -Body $body |
+                    Select-Object -ExpandProperty Content |
+                    Select-String -AllMatches -Pattern "(http[s]?\://download\.windowsupdate\.com\/[^\'\""]*)" |
+                    Select-Object -Unique
+
+                if (-not $links) {
+                    Write-Warning -Message "No file found for $Name"
+                    return
+                }
+
+                foreach ($link in $links) {
+                    $link.matches.value
+                }
+            }
+
+$exes | Select-String -Pattern "vcredist_$architecture" |  % {
+$filename= Split-Path $_ -Leaf
+$_.tostring()
+$filename
+Invoke-WebRequest -Uri $_.tostring() -OutFile "$downloadFolder\$filename"
+}
